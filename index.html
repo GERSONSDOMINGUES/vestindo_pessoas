@@ -1,95 +1,198 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Meu Modelo 3D Interativo</title>
-    <!-- Usando a versão 3.4.0 que é a mais estável para arquivos locais e giroscópio -->
-    <script type="module" src="https://googleapis.com"></script>
-    <style>
-        body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background: radial-gradient(circle, #f0f0f0 0%, #dcdcdc 100%);
-            font-family: sans-serif;
-        }
-        model-viewer {
-            width: 100%;
-            height: 100%;
-            display: block;
-        }
-        #btn-permissao {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 15px 30px;
-            background: #007bff;
-            color: white;
-            border: none;
-            border-radius: 30px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            z-index: 10;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AR com Giroscópio</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; background: #000; }
+    #camera {
+      position: fixed; top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      object-fit: cover; z-index: 0;
+    }
+    canvas { position: relative; z-index: 1; display: block; }
+    #permission {
+      position: fixed; inset: 0; z-index: 10;
+      background: rgba(0,0,0,0.9); color: #fff;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center; padding: 20px;
+    }
+    #permission button {
+      padding: 15px 30px; font-size: 18px;
+      background: #4CAF50; color: white; border: none;
+      border-radius: 8px; margin-top: 20px; cursor: pointer;
+    }
+    #info {
+      position: fixed; bottom: 10px; left: 10px;
+      color: #fff; font-size: 12px;
+      background: rgba(0,0,0,0.5); padding: 5px 10px;
+      border-radius: 5px; z-index: 5;
+    }
+  </style>
 </head>
 <body>
 
-    <button id="btn-permissao">Ativar Movimento por Giroscópio</button>
+  <!-- Câmera do celular ao fundo -->
+  <video id="camera" autoplay playsinline muted></video>
 
-    <!-- Usando caminhos relativos limpos e enquadramento forçado (bounds="tight") -->
-    <model-viewer id="modelo3d" 
-                  src="modelo.glb" 
-                  alt="Meu modelo 3D Interativo" 
-                  camera-controls 
-                  touch-action="none"
-                  auto-rotate
-                  bounds="tight"
-                  shadow-intensity="1"
-                  environment-image="neutral"
-                  exposure="1">
-    </model-viewer>
+  <!-- Tela de permissão -->
+  <div id="permission">
+    <h1>Realidade Aumentada</h1>
+    <p>Precisamos de acesso à câmera e ao giroscópio</p>
+    <button id="startBtn">Iniciar Experiência</button>
+  </div>
 
-    <script>
-        const modelo = document.getElementById('modelo3d');
-        const botao = document.getElementById('btn-permissao');
+  <div id="info">Mova o celular para girar o objeto</div>
 
-        // Força o modelo a atualizar o caminho caso o GitHub dê cache no arquivo anterior
-        window.addEventListener('load', () => {
-            modelo.src = "./modelo.glb?v=" + new Date().getTime();
+  <!-- Three.js via CDN -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+    // ==============================
+    // ⚠️ COLOQUE O CAMINHO DO SEU MODELO AQUI
+    // ==============================
+    const MODEL_URL = './modelo.glb'; // <-- seu arquivo 3D
+    const MODEL_SCALE = 1;             // ajuste o tamanho
+    const MODEL_Y_OFFSET = 0;          // subir/descer o objeto
+
+    // ---------- Three.js Setup ----------
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 1.5, 3);
+
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    // Luzes
+    scene.add(new THREE.AmbientLight(0xffffff, 1.2));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+    dirLight.position.set(2, 4, 3);
+    scene.add(dirLight);
+    const backLight = new THREE.DirectionalLight(0xffffff, 1);
+    backLight.position.set(-2, 2, -3);
+    scene.add(backLight);
+
+    // Grupo que vai receber o giroscópio
+    const gyroGroup = new THREE.Group();
+    scene.add(gyroGroup);
+
+    // ---------- Carregar modelo ----------
+    const loader = new GLTFLoader();
+    const draco = new DRACOLoader();
+    draco.setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/');
+    loader.setDRACOLoader(draco);
+
+    loader.load(
+      MODEL_URL,
+      (gltf) => {
+        const model = gltf.scene;
+        model.scale.setScalar(MODEL_SCALE);
+        model.position.y = MODEL_Y_OFFSET;
+        gyroGroup.add(model);
+        console.log('✅ Modelo carregado!');
+      },
+      (xhr) => {
+        console.log(`Carregando: ${(xhr.loaded / xhr.total * 100).toFixed(0)}%`);
+      },
+      (err) => console.error('❌ Erro ao carregar modelo:', err)
+    );
+
+    // ---------- Giroscópio ----------
+    let gyroActive = false;
+    const euler = new THREE.Euler();
+    const quaternion = new THREE.Quaternion();
+    const screenTransform = new THREE.Quaternion();
+    const zee = new THREE.Vector3(0, 0, 1);
+    const deviceOrientation = new THREE.Quaternion();
+
+    const ALPHA_OFFSET = Math.PI / 2; // ajuste fino para orientação
+    const _euler = new THREE.Euler();
+    const _q0 = new THREE.Quaternion();
+    const _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // -PI/2 no eixo X
+
+    function setObjectQuaternion(quat, alpha, beta, gamma, orient) {
+      _euler.set(beta, alpha, -gamma, 'YXZ');
+      quat.setFromEuler(_euler);
+      quat.multiply(_q1);
+      quat.multiply(_q0.setFromAxisAngle(zee, -orient));
+    }
+
+    function onDeviceOrientation(e) {
+      if (e.alpha === null) return;
+      const alpha = THREE.MathUtils.degToRad(e.alpha) + ALPHA_OFFSET;
+      const beta = THREE.MathUtils.degToRad(e.beta);
+      const gamma = THREE.MathUtils.degToRad(e.gamma);
+      const orient = THREE.MathUtils.degToRad(window.orientation || 0);
+
+      setObjectQuaternion(deviceOrientation, alpha, beta, gamma, orient);
+
+      // Aplica no grupo, mas suaviza
+      gyroGroup.quaternion.slerp(deviceOrientation, 0.15);
+      gyroActive = true;
+    }
+
+    // ---------- Iniciar câmera + giroscópio ----------
+    const startBtn = document.getElementById('startBtn');
+    const permissionDiv = document.getElementById('permission');
+
+    startBtn.addEventListener('click', async () => {
+      try {
+        // Câmera traseira
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
         });
+        const video = document.getElementById('camera');
+        video.srcObject = stream;
+        await video.play();
 
-        function iniciarGiroscopio() {
-            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission()
-                    .then(response => {
-                        if (response === 'granted') {
-                            window.addEventListener('deviceorientation', lidarComMovimento);
-                            botao.style.display = 'none';
-                        }
-                    })
-                    .catch(console.error);
-            } else {
-                window.addEventListener('deviceorientation', lidarComMovimento);
-                botao.style.display = 'none';
-            }
+        // iOS 13+ pede permissão explícita para giroscópio
+        if (typeof DeviceOrientationEvent !== 'undefined' &&
+            typeof DeviceOrientationEvent.requestPermission === 'function') {
+          const perm = await DeviceOrientationEvent.requestPermission();
+          if (perm !== 'granted') {
+            alert('Permissão do giroscópio negada.');
+          }
         }
 
-        function lidarComMovimento(event) {
-            const rX = event.gamma ? event.gamma : 0; 
-            const rY = event.beta ? event.beta : 0;   
-            const grausX = rX * 0.8;
-            const grausY = (rY - 60) * 0.8; 
-            modelo.cameraOrbit = `${grausX}deg ${grausY}deg auto`;
-        }
+        window.addEventListener('deviceorientation', onDeviceOrientation, true);
+        permissionDiv.style.display = 'none';
 
-        botao.addEventListener('click', iniciarGiroscopio);
-    </script>
+      } catch (err) {
+        alert('Erro ao acessar câmera: ' + err.message);
+        console.error(err);
+      }
+    });
+
+    // ---------- Resize ----------
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // ---------- Loop de render ----------
+    function animate() {
+      requestAnimationFrame(animate);
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
 </body>
 </html>
